@@ -179,19 +179,70 @@ jobs:
           mkdir -p system/extras
           cp -r /tmp/system_extras_old/ext4_utils system/extras/ext4_utils
 
-          # ---------- MinGW 兼容 stub 头文件 ----------
+          # ---------- MinGW 兼容头：真实现 mmap / munmap ----------
           echo "===== 创建 MinGW 兼容头目录 ====="
           mkdir -p compat/sys
           cat > compat/sys/mman.h <<'MMAN_EOF'
           #ifndef _STUB_SYS_MMAN_H
           #define _STUB_SYS_MMAN_H
+
           /*
            * MinGW 没有 sys/mman.h。
-           * 这里只是让 engine.c 能编过。
-           * 如果 engine.c 真的调了 mmap/munmap，链接阶段会报 undefined reference，
-           * 到时再在 stub 里补实现。
+           * 这里用 Windows 的 CreateFileMapping / MapViewOfFile
+           * 实现 mmap / munmap 的最小可用版本。
+           * 只支持基于文件句柄的内存映射，不处理 addr 参数。
            */
+
           #include <sys/types.h>
+          #include <io.h>
+          #include <windows.h>
+
+          #ifndef PROT_READ
+          #define PROT_READ  0x1
+          #endif
+          #ifndef PROT_WRITE
+          #define PROT_WRITE 0x2
+          #endif
+          #ifndef MAP_SHARED
+          #define MAP_SHARED  0x01
+          #endif
+          #ifndef MAP_PRIVATE
+          #define MAP_PRIVATE 0x02
+          #endif
+          #ifndef MAP_FAILED
+          #define MAP_FAILED ((void *) -1)
+          #endif
+
+          static inline void *
+          mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
+          {
+              (void) addr;
+              (void) flags;
+              (void) offset;
+
+              HANDLE hFile = (HANDLE) _get_osfhandle(fd);
+              if (hFile == INVALID_HANDLE_VALUE)
+                  return MAP_FAILED;
+
+              DWORD flProtect = (prot & PROT_WRITE) ? PAGE_READWRITE : PAGE_READONLY;
+              HANDLE hMap = CreateFileMappingA(hFile, NULL, flProtect, 0, 0, NULL);
+              if (hMap == NULL)
+                  return MAP_FAILED;
+
+              DWORD dwAccess = (prot & PROT_WRITE) ? FILE_MAP_WRITE : FILE_MAP_READ;
+              void *p = MapViewOfFile(hMap, dwAccess, 0, 0, (SIZE_T) length);
+              CloseHandle(hMap);
+
+              return p ? p : MAP_FAILED;
+          }
+
+          static inline int
+          munmap(void *addr, size_t length)
+          {
+              (void) length;
+              return UnmapViewOfFile(addr) ? 0 : -1;
+          }
+
           #endif
           MMAN_EOF
 
@@ -227,7 +278,6 @@ jobs:
           SRCS  += backed_block.c output_file.c sparse.c sparse_crc32.c \
                    sparse_err.c sparse_read.c
 
-          # 注意：compat 在 aosp/compat，相对 fastboot 是 ../../../compat
           CPPFLAGS  = -DHOST -DADB_HOST=1 -DHAVE_FORKEXEC=1 -DHAVE_SYMLINKS
           CPPFLAGS += -DHAVE_TERMIO_H -DHAVE_SYS_SOCKET_H -D_GNU_SOURCE -D_XOPEN_SOURCE
           CPPFLAGS += -I. -I../include -I../mkbootimg -I../libsparse/include
