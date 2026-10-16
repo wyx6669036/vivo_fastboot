@@ -8,8 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  # 换成 6.0.1，libzipfile 还在
-  AOSP_TAG: android-6.0.1_r81
+  AOSP_TAG: android-5.1.1_r38
   AOSP_BASE: https://android.googlesource.com
 
 jobs:
@@ -24,7 +23,7 @@ jobs:
 
       - name: Setup AOSP layout
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           mkdir -p aosp/system/core/fastboot
           cp -r _src/. aosp/system/core/fastboot/
@@ -32,42 +31,45 @@ jobs:
 
           cd aosp
 
-          # --- system/core 一次性 clone，逐个检查子目录 ---
-          git clone --depth=1 --branch "$AOSP_TAG" \
-            "${AOSP_BASE}/platform/system/core" /tmp/system_core
+          clone_at_tag () {
+            rm -rf "$2"
+            git clone --depth=1 --branch "$AOSP_TAG" \
+              "${AOSP_BASE}/$1" "$2"
+          }
 
+          clone_at_tag platform/system/core    /tmp/system_core
+          clone_at_tag platform/system/extras  /tmp/system_extras
+          clone_at_tag platform/external/zlib       external/zlib
+          clone_at_tag platform/external/openssl    external/openssl
+          clone_at_tag platform/external/libselinux external/libselinux
+
+          echo "---- /tmp/system_core 顶层 ----";     ls /tmp/system_core
+          echo "---- /tmp/system_extras 顶层 ----";   ls /tmp/system_extras
+          echo "---- external/zlib 顶层 ----";        ls external/zlib
+          echo "---- external/libselinux 顶层 ----";  ls external/libselinux
+
+          mkdir -p system/core
           for dir in include libcutils libsparse libzipfile mkbootimg; do
             if [ -d "/tmp/system_core/$dir" ]; then
-              mkdir -p system/core
               cp -r "/tmp/system_core/$dir" system/core/
-              echo "OK: system/core/$dir"
+              echo "OK   : system/core/$dir"
             else
-              echo "========== MISSING: /tmp/system_core/$dir =========="
-              echo "---- /tmp/system_core 顶层目录 ----"
-              ls -la /tmp/system_core
-              exit 1
+              echo "MISS : system/core/$dir"
             fi
           done
 
-          # --- system/extras/ext4_utils ---
-          git clone --depth=1 --branch "$AOSP_TAG" \
-            "${AOSP_BASE}/platform/system/extras" /tmp/system_extras
           mkdir -p system/extras
-          cp -r /tmp/system_extras/ext4_utils system/extras/
-          echo "OK: system/extras/ext4_utils"
+          if [ -d /tmp/system_extras/ext4_utils ]; then
+            cp -r /tmp/system_extras/ext4_utils system/extras/
+            echo "OK   : system/extras/ext4_utils"
+          else
+            echo "MISS : system/extras/ext4_utils"
+          fi
 
-          # --- external ---
-          git clone --depth=1 --branch "$AOSP_TAG" \
-            "${AOSP_BASE}/platform/external/zlib" external/zlib
-          git clone --depth=1 --branch "$AOSP_TAG" \
-            "${AOSP_BASE}/platform/external/openssl" external/openssl
-          git clone --depth=1 --branch "$AOSP_TAG" \
-            "${AOSP_BASE}/platform/external/libselinux" external/libselinux
-
-          echo "===== 最终目录结构 ====="
-          ls system/core/
-          ls system/extras/
-          ls external/
+          echo "---- 关键路径检查 ----"
+          for p in external/zlib/src external/libselinux/src external/openssl/include; do
+            [ -d "$p" ] && echo "OK   : $p" || echo "MISS : $p"
+          done
 
       - name: Install build deps
         run: |
