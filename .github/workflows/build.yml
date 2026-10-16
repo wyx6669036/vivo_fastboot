@@ -163,7 +163,6 @@ jobs:
           mkdir -p compat
           if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR" ]; then
             cp -v "$SRC_DIR"/*.h compat/
-            # 去掉 __declspec(dllimport) / __declspec(dllexport)，避免 __imp_ 符号
             sed -i 's/__declspec(dllimport)//g; s/__declspec(dllexport)//g' compat/adb_api.h 2>/dev/null || true
             echo "----- compat/adb_api.h 头部 20 行 -----"
             head -20 compat/adb_api.h
@@ -218,7 +217,6 @@ jobs:
           echo "===== 查找 DLL ====="
           find . -name 'AdbWinApi.dll' -o -name 'AdbWinUsbApi.dll'
 
-          # 用绝对路径，避免相对路径跨到 / 根目录
           DLL_DEST="${GITHUB_WORKSPACE}/aosp/compat/dll"
           mkdir -p "$DLL_DEST"
           find . -name 'AdbWinApi.dll'    -exec cp -v {} "$DLL_DEST/" \;
@@ -290,6 +288,7 @@ jobs:
           #include <windows.h>
           #include <stdio.h>
           #include <string.h>
+          #include <stdbool.h>
 
           typedef void *ADBAPIHANDLE;
 
@@ -531,6 +530,14 @@ jobs:
 
           # 去掉 __cdecl，使用默认调用约定（与 adb_api.h 一致）
           sed -i 's/__cdecl //g' compat/adb_api_real.c
+
+          # 确保 stdbool.h 存在（bool/true/false）
+          if ! grep -q 'stdbool.h' compat/adb_api_real.c; then
+            sed -i 's|#include <string.h>|#include <string.h>\n#include <stdbool.h>|' compat/adb_api_real.c
+          fi
+
+          echo "----- adb_api_real.c 前 8 行 -----"
+          head -8 compat/adb_api_real.c
 
           echo "----- compat 目录内容 -----"
           ls -la compat/
