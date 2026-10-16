@@ -10,12 +10,11 @@ on:
 env:
   AOSP_TAG: android-5.1.1_r38
   AOSP_TAG_OLD: android-4.4.4_r2
-  AOSP_TAG_DEV: android-2.3.7_r1
   AOSP_BASE: https://android.googlesource.com
 
 jobs:
   # =====================================================================
-  # Linux 版
+  # Linux 版（保持不变，已跑通）
   # =====================================================================
   build-linux:
     runs-on: ubuntu-latest
@@ -29,11 +28,9 @@ jobs:
       - name: Setup AOSP layout
         run: |
           set -uo pipefail
-
           mkdir -p aosp/system/core/fastboot
           cp -r _src/. aosp/system/core/fastboot/
           rm -rf aosp/system/core/fastboot/.git
-
           cd aosp
 
           clone_at_tag () {
@@ -42,14 +39,12 @@ jobs:
               "${AOSP_BASE}/$1" "$2"
           }
 
-          echo "===== clone 主依赖 ====="
           clone_at_tag platform/system/core    /tmp/system_core
           clone_at_tag platform/system/extras  /tmp/system_extras
           clone_at_tag platform/external/zlib       external/zlib
           clone_at_tag platform/external/openssl    external/openssl
           clone_at_tag platform/external/libselinux external/libselinux
 
-          echo "===== 拷贝 system/core 子目录 ====="
           mkdir -p system/core
           for dir in include libcutils libsparse libzipfile mkbootimg; do
             if [ -d "/tmp/system_core/$dir" ]; then
@@ -60,47 +55,28 @@ jobs:
             fi
           done
 
-          echo "===== 拉取 4.4.4_r2 作为补丁源 ====="
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/core" /tmp/sc_old
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/extras" /tmp/system_extras_old
 
-          echo "===== 补 libcutils 老文件 ====="
           mkdir -p system/core/libcutils system/core/libzipfile
-          for f in socket_inaddr_any_server.c \
-                   socket_local_client.c \
-                   socket_local_server.c \
-                   socket_loopback_client.c \
-                   socket_loopback_server.c \
-                   socket_network_client.c \
+          for f in socket_inaddr_any_server.c socket_local_client.c \
+                   socket_local_server.c socket_loopback_client.c \
+                   socket_loopback_server.c socket_network_client.c \
                    load_file.c ; do
             if [ ! -f "system/core/libcutils/$f" ] && [ -f "/tmp/sc_old/libcutils/$f" ]; then
               cp "/tmp/sc_old/libcutils/$f" system/core/libcutils/
               echo "补 : libcutils/$f"
-            elif [ -f "system/core/libcutils/$f" ]; then
-              echo "有 : libcutils/$f"
-            else
-              echo "缺 : libcutils/$f"
             fi
           done
 
-          echo "===== 整个 libzipfile 用 4.4.4_r2 覆盖 ====="
           rm -rf system/core/libzipfile
           cp -r /tmp/sc_old/libzipfile system/core/libzipfile
-          ls system/core/libzipfile/
 
-          echo "===== 整个 ext4_utils 替换为 4.4.4_r2 版本 ====="
           rm -rf system/extras/ext4_utils
           mkdir -p system/extras
           cp -r /tmp/system_extras_old/ext4_utils system/extras/ext4_utils
-
-          echo "===== 最终 libcutils ====="
-          ls system/core/libcutils/
-          echo "===== 最终 libzipfile ====="
-          ls system/core/libzipfile/
-          echo "===== 最终 ext4_utils ====="
-          ls system/extras/ext4_utils/
 
       - name: Install build deps
         run: |
@@ -111,15 +87,12 @@ jobs:
         working-directory: aosp/system/core/fastboot
         run: |
           sed -i 's|^TOOLCHAIN=.*|TOOLCHAIN=|' makefile
-          sed -i 's/\bgettid\b/gettid_selinux/g' \
-            ../../../external/libselinux/src/procattr.c
+          sed -i 's/\bgettid\b/gettid_selinux/g' ../../../external/libselinux/src/procattr.c
           sed -i 's|^CPPFLAGS+= -DHOST$|CPPFLAGS+= -DHOST\nCPPFLAGS+= -include sys/sysmacros.h|' makefile
           sed -i '/^SRCS+= list\.c[[:space:]]*$/d' makefile
           sed -i 's|^CPPFLAGS+= -D_XOPEN_SOURCE$|CPPFLAGS+= -D_XOPEN_SOURCE\nCPPFLAGS+= -D_FILE_OFFSET_BITS=64|' makefile
           sed -i 's/static inline off64_t lseek64(/static inline off64_t aosp_compat_unused_lseek64(/' \
             ../include/utils/Compat.h
-
-          grep -E '^CPPFLAGS\+=' makefile
           make CC=gcc LD=gcc LIBS="-lpcre -lpthread"
 
       - name: Upload Linux artifact
@@ -130,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   # =====================================================================
-  # Windows 版
+  # Windows 版（真实现，不再空壳）
   # =====================================================================
   build-windows:
     runs-on: ubuntu-latest
@@ -151,7 +124,7 @@ jobs:
 
           cd aosp
 
-          # 主 tag：头文件来源
+          # 主 tag
           git clone --depth=1 --branch "$AOSP_TAG" \
             "${AOSP_BASE}/platform/system/core" /tmp/system_core
           git clone --depth=1 --branch "$AOSP_TAG" \
@@ -159,12 +132,7 @@ jobs:
 
           mkdir -p system/core
           for dir in include libsparse mkbootimg ; do
-            if [ -d "/tmp/system_core/$dir" ]; then
-              cp -r "/tmp/system_core/$dir" system/core/
-              echo "OK   : system/core/$dir"
-            else
-              echo "MISS : system/core/$dir"
-            fi
+            [ -d "/tmp/system_core/$dir" ] && cp -r "/tmp/system_core/$dir" system/core/
           done
 
           # 4.4.4_r2 的 system/core 和 system/extras
@@ -173,19 +141,53 @@ jobs:
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/extras" /tmp/system_extras_old
 
-          # libzipfile：整个目录覆盖（含 private.h 等头文件）
+          # libzipfile：整个目录覆盖
           rm -rf system/core/libzipfile
           cp -r /tmp/sc_old/libzipfile system/core/libzipfile
-          echo "----- libzipfile -----"
-          ls system/core/libzipfile/
 
           # ext4_utils：整个目录覆盖
           rm -rf system/extras/ext4_utils
           mkdir -p system/extras
           cp -r /tmp/system_extras_old/ext4_utils system/extras/ext4_utils
 
-          # ---------- compat 目录 ----------
-          echo "===== 创建 compat 目录 ====="
+      # ---------- 下载 MSYS2 的 AdbWinApi.dll 和 AdbWinUsbApi.dll ----------
+      - name: Download AdbWinApi.dll from MSYS2
+        run: |
+          set -e
+          mkdir -p /tmp/msys2_dll
+          cd /tmp/msys2_dll
+
+          # 安装 zstd 用于解压 .pkg.tar.zst
+          sudo apt-get update
+          sudo apt-get install -y zstd curl
+
+          # 下载 MSYS2 的 android-tools 包
+          # 该包包含预编译的 AdbWinApi.dll 和 AdbWinUsbApi.dll
+          curl -L -o android-tools.pkg.tar.zst \
+            "https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-android-tools-34.0.5-1-any.pkg.tar.zst"
+
+          # 解压
+          tar --use-compress-program=unzstd -xf android-tools.pkg.tar.zst
+
+          # 找到 DLL
+          echo "===== 查找 DLL ====="
+          find . -name 'AdbWinApi.dll' -o -name 'AdbWinUsbApi.dll'
+
+          # 拷贝到 compat/dll 目录
+          mkdir -p ../../../compat/dll
+          find . -name 'AdbWinApi.dll' -exec cp {} ../../../compat/dll/ \;
+          find . -name 'AdbWinUsbApi.dll' -exec cp {} ../../../compat/dll/ \;
+
+          echo "===== compat/dll 内容 ====="
+          ls -la ../../../compat/dll/
+
+      # ---------- 创建 compat 目录 ----------
+      - name: Create compat headers and stubs
+        run: |
+          set -uo pipefail
+
+          cd aosp
+
           mkdir -p compat/sys
 
           # 1) sys/mman.h + mmap64 别名
@@ -240,84 +242,286 @@ jobs:
           #endif
           MMAN_EOF
 
-          # 2) adb_api.h → compat/，去掉 dllimport
-          rm -rf /tmp/development
-          git clone --depth=1 --branch "${AOSP_TAG_DEV}" \
-            "${AOSP_BASE}/platform/development" /tmp/development || true
-          SRC_DIR="$(find /tmp/development -name 'adb_api.h' -exec dirname {} \; 2>/dev/null | head -1)"
-          echo "adb_api.h 所在目录: $SRC_DIR"
-          if [ -n "$SRC_DIR" ]; then
-            cp "$SRC_DIR"/*.h compat/ 2>/dev/null || true
-          fi
-          if [ -f compat/adb_api.h ]; then
-            sed -i 's/__declspec(dllimport)//g; s/__declspec(dllexport)//g' compat/adb_api.h
-            echo "----- adb_api.h 头部 20 行 -----"
-            head -20 compat/adb_api.h
-          fi
+          # 2) adb_api_real.c：动态加载 AdbWinApi.dll
+          cat > compat/adb_api_real.c <<'ADB_REAL_EOF'
+          /*
+           * adb_api_real.c
+           *
+           * 通过 LoadLibrary + GetProcAddress 动态加载 AdbWinApi.dll，
+           * 提供 usb_windows.c 所需的全部 ADB API 函数。
+           *
+           * 运行时从 exe 同目录加载 AdbWinApi.dll。
+           * 如果加载失败，所有函数返回失败（设备枚举为空）。
+           */
 
-          # 3) AdbWinApi stub
-          cat > compat/adb_api_stub.c <<'ADB_EOF'
           #include <windows.h>
+          #include <stdio.h>
+          #include <string.h>
 
-          void *__stdcall AdbCreateInterfaceByName(const wchar_t *n)
-          { (void)n; return 0; }
+          typedef void *ADBAPIHANDLE;
 
-          void *__stdcall AdbOpenDefaultBulkReadEndpoint(void *h, int a, int s, int async)
-          { (void)h; (void)a; (void)s; (void)async; return 0; }
+          static HMODULE g_adbwinapi = NULL;
 
-          void *__stdcall AdbOpenDefaultBulkWriteEndpoint(void *h, int a, int s, int async)
-          { (void)h; (void)a; (void)s; (void)async; return 0; }
-
-          int __stdcall AdbGetInterfaceName(void *h, wchar_t *buf, unsigned long *sz, int ansi)
-          { (void)h; (void)buf; (void)sz; (void)ansi; return 0; }
-
-          int __stdcall AdbReadEndpointSync(void *h, void *buf, unsigned long n,
-                                            unsigned long *r, unsigned long t, unsigned long *ta)
-          { (void)h; (void)buf; (void)n; (void)r; (void)t; (void)ta; return 0; }
-
-          int __stdcall AdbWriteEndpointSync(void *h, void *buf, unsigned long n,
-                                             unsigned long *w, unsigned long t)
-          { (void)h; (void)buf; (void)n; (void)w; (void)t; return 0; }
-
-          int __stdcall AdbGetUsbDeviceDescriptor(void *h, void *d)
-          { (void)h; (void)d; return 0; }
-
-          int __stdcall AdbGetUsbInterfaceDescriptor(void *h, void *d)
-          { (void)h; (void)d; return 0; }
-
-          int __stdcall AdbGetSerialNumber(void *h, wchar_t *buf, unsigned long *sz, int ansi)
-          { (void)h; (void)buf; (void)sz; (void)ansi; return 0; }
-
-          void *__stdcall AdbEnumInterfaces(const void *g, int a, int b, int c)
-          { (void)g; (void)a; (void)b; (void)c; return 0; }
-
-          int __stdcall AdbNextInterface(void *h, void *i, unsigned long *sz)
-          { (void)h; (void)i; (void)sz; return 0; }
-
-          int __stdcall AdbCloseHandle(void *h)
-          { (void)h; return 1; }
-          ADB_EOF
-
-          # 4) ext4_utils 里 make_ext4fs_sparse_fd 的 stub
-          cat > compat/ext4_stub.c <<'EXT4_EOF'
-          int make_ext4fs_sparse_fd(int fd, long long len,
-                                    const char *mountpoint,
-                                    void *seopts, unsigned nseopts)
+          static void
+          ensure_load(void)
           {
-              (void)fd; (void)len; (void)mountpoint; (void)seopts; (void)nseopts;
-              return -1;
-          }
-          EXT4_EOF
+              if (g_adbwinapi)
+                  return;
 
+              /* 优先从 exe 同目录加载 */
+              char path[MAX_PATH];
+              GetModuleFileNameA(NULL, path, MAX_PATH);
+              char *p = strrchr(path, '\\');
+              if (p) {
+                  *(p + 1) = 0;
+                  strcat(path, "AdbWinApi.dll");
+              } else {
+                  strcpy(path, "AdbWinApi.dll");
+              }
+
+              g_adbwinapi = LoadLibraryA(path);
+
+              if (!g_adbwinapi)
+                  g_adbwinapi = LoadLibraryA("AdbWinApi.dll");
+
+              if (!g_adbwinapi) {
+                  fprintf(stderr,
+                      "fastboot: failed to load AdbWinApi.dll "
+                      "(error %lu)\n", GetLastError());
+              }
+          }
+
+          /* ===== 动态加载辅助宏 ===== */
+          #define ADB_RESOLVE(fn, type) \
+              do { \
+                  if (!g_##fn) \
+                      g_##fn = (type)GetProcAddress(g_adbwinapi, #fn); \
+              } while (0)
+
+          /* ===== AdbCreateInterfaceByName ===== */
+          typedef ADBAPIHANDLE (__cdecl *AdbCreateInterfaceByName_t)(const wchar_t *);
+          static AdbCreateInterfaceByName_t g_AdbCreateInterfaceByName = NULL;
+
+          ADBAPIHANDLE __cdecl
+          AdbCreateInterfaceByName(const wchar_t *interface_name)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return NULL;
+              ADB_RESOLVE(AdbCreateInterfaceByName, AdbCreateInterfaceByName_t);
+              if (!g_AdbCreateInterfaceByName) return NULL;
+              return g_AdbCreateInterfaceByName(interface_name);
+          }
+
+          /* ===== AdbOpenDefaultBulkReadEndpoint ===== */
+          typedef ADBAPIHANDLE (__cdecl *AdbOpenDefaultBulkReadEndpoint_t)(
+              ADBAPIHANDLE, int, int, int);
+          static AdbOpenDefaultBulkReadEndpoint_t g_AdbOpenDefaultBulkReadEndpoint = NULL;
+
+          ADBAPIHANDLE __cdecl
+          AdbOpenDefaultBulkReadEndpoint(ADBAPIHANDLE adb_interface,
+                                          int endpoint_index,
+                                          int endpoint_type,
+                                          int async)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return NULL;
+              ADB_RESOLVE(AdbOpenDefaultBulkReadEndpoint,
+                          AdbOpenDefaultBulkReadEndpoint_t);
+              if (!g_AdbOpenDefaultBulkReadEndpoint) return NULL;
+              return g_AdbOpenDefaultBulkReadEndpoint(
+                  adb_interface, endpoint_index, endpoint_type, async);
+          }
+
+          /* ===== AdbOpenDefaultBulkWriteEndpoint ===== */
+          typedef ADBAPIHANDLE (__cdecl *AdbOpenDefaultBulkWriteEndpoint_t)(
+              ADBAPIHANDLE, int, int, int);
+          static AdbOpenDefaultBulkWriteEndpoint_t g_AdbOpenDefaultBulkWriteEndpoint = NULL;
+
+          ADBAPIHANDLE __cdecl
+          AdbOpenDefaultBulkWriteEndpoint(ADBAPIHANDLE adb_interface,
+                                           int endpoint_index,
+                                           int endpoint_type,
+                                           int async)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return NULL;
+              ADB_RESOLVE(AdbOpenDefaultBulkWriteEndpoint,
+                          AdbOpenDefaultBulkWriteEndpoint_t);
+              if (!g_AdbOpenDefaultBulkWriteEndpoint) return NULL;
+              return g_AdbOpenDefaultBulkWriteEndpoint(
+                  adb_interface, endpoint_index, endpoint_type, async);
+          }
+
+          /* ===== AdbGetInterfaceName ===== */
+          typedef bool (__cdecl *AdbGetInterfaceName_t)(
+              ADBAPIHANDLE, wchar_t *, unsigned long *, int);
+          static AdbGetInterfaceName_t g_AdbGetInterfaceName = NULL;
+
+          bool __cdecl
+          AdbGetInterfaceName(ADBAPIHANDLE adb_interface,
+                              wchar_t *name,
+                              unsigned long *name_size,
+                              int ansi)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbGetInterfaceName, AdbGetInterfaceName_t);
+              if (!g_AdbGetInterfaceName) return false;
+              return g_AdbGetInterfaceName(adb_interface, name, name_size, ansi);
+          }
+
+          /* ===== AdbReadEndpointSync ===== */
+          typedef bool (__cdecl *AdbReadEndpointSync_t)(
+              ADBAPIHANDLE, void *, unsigned long, unsigned long *,
+              unsigned long, unsigned long *);
+          static AdbReadEndpointSync_t g_AdbReadEndpointSync = NULL;
+
+          bool __cdecl
+          AdbReadEndpointSync(ADBAPIHANDLE adb_endpoint,
+                              void *buffer,
+                              unsigned long bytes_to_read,
+                              unsigned long *bytes_read,
+                              unsigned long time_out,
+                              unsigned long *time_out_actual)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbReadEndpointSync, AdbReadEndpointSync_t);
+              if (!g_AdbReadEndpointSync) return false;
+              return g_AdbReadEndpointSync(adb_endpoint, buffer, bytes_to_read,
+                                           bytes_read, time_out, time_out_actual);
+          }
+
+          /* ===== AdbWriteEndpointSync ===== */
+          typedef bool (__cdecl *AdbWriteEndpointSync_t)(
+              ADBAPIHANDLE, void *, unsigned long, unsigned long *, unsigned long);
+          static AdbWriteEndpointSync_t g_AdbWriteEndpointSync = NULL;
+
+          bool __cdecl
+          AdbWriteEndpointSync(ADBAPIHANDLE adb_endpoint,
+                               void *buffer,
+                               unsigned long bytes_to_write,
+                               unsigned long *bytes_written,
+                               unsigned long time_out)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbWriteEndpointSync, AdbWriteEndpointSync_t);
+              if (!g_AdbWriteEndpointSync) return false;
+              return g_AdbWriteEndpointSync(adb_endpoint, buffer, bytes_to_write,
+                                            bytes_written, time_out);
+          }
+
+          /* ===== AdbGetUsbDeviceDescriptor ===== */
+          typedef bool (__cdecl *AdbGetUsbDeviceDescriptor_t)(ADBAPIHANDLE, void *);
+          static AdbGetUsbDeviceDescriptor_t g_AdbGetUsbDeviceDescriptor = NULL;
+
+          bool __cdecl
+          AdbGetUsbDeviceDescriptor(ADBAPIHANDLE adb_interface, void *desc)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbGetUsbDeviceDescriptor, AdbGetUsbDeviceDescriptor_t);
+              if (!g_AdbGetUsbDeviceDescriptor) return false;
+              return g_AdbGetUsbDeviceDescriptor(adb_interface, desc);
+          }
+
+          /* ===== AdbGetUsbInterfaceDescriptor ===== */
+          typedef bool (__cdecl *AdbGetUsbInterfaceDescriptor_t)(ADBAPIHANDLE, void *);
+          static AdbGetUsbInterfaceDescriptor_t g_AdbGetUsbInterfaceDescriptor = NULL;
+
+          bool __cdecl
+          AdbGetUsbInterfaceDescriptor(ADBAPIHANDLE adb_interface, void *desc)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbGetUsbInterfaceDescriptor, AdbGetUsbInterfaceDescriptor_t);
+              if (!g_AdbGetUsbInterfaceDescriptor) return false;
+              return g_AdbGetUsbInterfaceDescriptor(adb_interface, desc);
+          }
+
+          /* ===== AdbGetSerialNumber ===== */
+          typedef bool (__cdecl *AdbGetSerialNumber_t)(
+              ADBAPIHANDLE, wchar_t *, unsigned long *, int);
+          static AdbGetSerialNumber_t g_AdbGetSerialNumber = NULL;
+
+          bool __cdecl
+          AdbGetSerialNumber(ADBAPIHANDLE adb_interface,
+                             wchar_t *serial_number,
+                             unsigned long *serial_number_size,
+                             int ansi)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbGetSerialNumber, AdbGetSerialNumber_t);
+              if (!g_AdbGetSerialNumber) return false;
+              return g_AdbGetSerialNumber(adb_interface, serial_number,
+                                          serial_number_size, ansi);
+          }
+
+          /* ===== AdbEnumInterfaces ===== */
+          typedef ADBAPIHANDLE (__cdecl *AdbEnumInterfaces_t)(
+              void *, int, int, int);
+          static AdbEnumInterfaces_t g_AdbEnumInterfaces = NULL;
+
+          ADBAPIHANDLE __cdecl
+          AdbEnumInterfaces(void *class_id,
+                            int enum_not_present,
+                            int single_interface,
+                            int close_handle)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return NULL;
+              ADB_RESOLVE(AdbEnumInterfaces, AdbEnumInterfaces_t);
+              if (!g_AdbEnumInterfaces) return NULL;
+              return g_AdbEnumInterfaces(class_id, enum_not_present,
+                                         single_interface, close_handle);
+          }
+
+          /* ===== AdbNextInterface ===== */
+          typedef bool (__cdecl *AdbNextInterface_t)(
+              ADBAPIHANDLE, void *, unsigned long *);
+          static AdbNextInterface_t g_AdbNextInterface = NULL;
+
+          bool __cdecl
+          AdbNextInterface(ADBAPIHANDLE adb_handle,
+                           void *info,
+                           unsigned long *size)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return false;
+              ADB_RESOLVE(AdbNextInterface, AdbNextInterface_t);
+              if (!g_AdbNextInterface) return false;
+              return g_AdbNextInterface(adb_handle, info, size);
+          }
+
+          /* ===== AdbCloseHandle ===== */
+          typedef bool (__cdecl *AdbCloseHandle_t)(ADBAPIHANDLE);
+          static AdbCloseHandle_t g_AdbCloseHandle = NULL;
+
+          bool __cdecl
+          AdbCloseHandle(ADBAPIHANDLE adb_handle)
+          {
+              ensure_load();
+              if (!g_adbwinapi) return true;
+              ADB_RESOLVE(AdbCloseHandle, AdbCloseHandle_t);
+              if (!g_AdbCloseHandle) return true;
+              return g_AdbCloseHandle(adb_handle);
+          }
+          ADB_REAL_EOF
+
+          echo "----- compat/adb_api_real.c 前 20 行 -----"
+          head -20 compat/adb_api_real.c
           echo "----- compat 目录内容 -----"
           ls -la compat/
-          ls -la compat/sys/
 
+      # ---------- 安装 mingw-w64 ----------
       - name: Install mingw-w64
         run: |
           sudo apt-get update
           sudo apt-get install -y mingw-w64
 
+      # ---------- 写 Windows makefile ----------
       - name: Write Windows makefile
         working-directory: aosp/system/core/fastboot
         run: |
@@ -343,10 +547,16 @@ jobs:
           SRCS  += centraldir.c zipfile.c
 
           VPATH += ../../../compat
-          SRCS  += adb_api_stub.c ext4_stub.c
+          SRCS  += adb_api_real.c
+
+          # ext4_utils 真实源文件（不再用 stub）
+          VPATH += ../../extras/ext4_utils
+          SRCS  += ext4_utils.c allocate.c contents.c extent.c indirect.c \
+                   uuid.c sha1.c wipe.c crc16.c
 
           CPPFLAGS  = -DHOST -DADB_HOST=1 -DHAVE_FORKEXEC=1 -DHAVE_SYMLINKS
           CPPFLAGS += -DHAVE_TERMIO_H -DHAVE_SYS_SOCKET_H -D_GNU_SOURCE -D_XOPEN_SOURCE
+          CPPFLAGS += -DUSE_MINGW
           CPPFLAGS += -I. -I../include -I../mkbootimg -I../libsparse/include
           CPPFLAGS += -I../libzipfile
           CPPFLAGS += -I../../extras/ext4_utils
@@ -374,14 +584,57 @@ jobs:
           echo "===== makefile.win ====="
           cat makefile.win
 
+      # ---------- 编译前 patch ext4_utils 源码 ----------
+      - name: Patch ext4_utils for MinGW
+        working-directory: aosp/system/extras/ext4_utils
+        run: |
+          set -uo pipefail
+
+          # 1) ext4_utils.c：添加 USE_MINGW 条件包含
+          #    参考 AOSP 官方补丁 Iba3758a0e13a898920d30d7fa5da696c22daa2b7
+          if ! grep -q 'USE_MINGW' ext4_utils.c; then
+            # 在 #include <fcntl.h> 之后添加 winsock2.h
+            sed -i 's|#include <fcntl.h>|#include <fcntl.h>\n#ifdef USE_MINGW\n#include <winsock2.h>\n#else\n#include <arpa/inet.h>\n#include <sys/ioctl.h>\n#endif|' ext4_utils.c
+            # 删除原有的 arpa/inet.h 和 sys/ioctl.h 直接包含（已移入条件块）
+            sed -i '/^#include <arpa\/inet.h>/d' ext4_utils.c
+            sed -i '/^#include <sys\/ioctl.h>/d' ext4_utils.c
+            echo "Patched ext4_utils.c"
+          fi
+
+          # 2) ext4_utils.h：添加 errno.h
+          if ! grep -q 'errno.h' ext4_utils.h; then
+            sed -i 's|#include <string.h>|#include <string.h>\n#include <errno.h>|' ext4_utils.h
+            echo "Patched ext4_utils.h"
+          fi
+
+          # 3) contents.c：USE_MINGW 下屏蔽 S_IFLNK
+          if ! grep -q 'S_IFLNK' contents.c; then
+            sed -i 's|#include "ext4_utils.h"|#include "ext4_utils.h"\n#ifdef USE_MINGW\n#define S_IFLNK 0\n#endif|' contents.c
+            echo "Patched contents.c"
+          fi
+
+          # 4) sha1.c：添加头文件
+          sed -i 's|#include <string.h>|#include <string.h>\n#include <stdint.h>|' sha1.c 2>/dev/null || true
+
+          # 5) crc16.c：添加头文件
+          sed -i 's|#include <stdint.h>|#include <stdint.h>\n#include <string.h>|' crc16.c 2>/dev/null || true
+
+          echo "===== ext4_utils.c 包含部分 ====="
+          head -30 ext4_utils.c
+
+      # ---------- 编译 Windows fastboot.exe ----------
       - name: Build Windows fastboot.exe
         working-directory: aosp/system/core/fastboot
         run: |
           make -f makefile.win
 
+      # ---------- 上传产物（含 DLL） ----------
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: fastboot-windows
-          path: aosp/system/core/fastboot/fastboot.exe
+          path: |
+            aosp/system/core/fastboot/fastboot.exe
+            aosp/compat/dll/AdbWinApi.dll
+            aosp/compat/dll/AdbWinUsbApi.dll
           if-no-files-found: error
