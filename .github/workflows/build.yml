@@ -64,24 +64,24 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential
+          sudo apt-get install -y build-essential libpcre3-dev
 
       - name: Build
         working-directory: aosp/system/core/fastboot
         run: |
-          # 1) 把 poky 硬编码工具链路径清空
+          # 1) 清空硬编码 poky 工具链
           sed -i 's|^TOOLCHAIN=.*|TOOLCHAIN=|' makefile
 
           # 2) 规避 glibc>=2.30 的 gettid 符号冲突
           sed -i 's/\bgettid\b/gettid_selinux/g' \
             ../../../external/libselinux/src/procattr.c
-          echo "---- procattr.c gettid 相关行 ----"
-          grep -n 'gettid' ../../../external/libselinux/src/procattr.c || true
 
-          # 3) 编译
-          echo "===== TOOLCHAIN / CC / LD ====="
+          # 3) 规避 glibc 把 major/minor 从 sys/types.h 拆出的问题
+          sed -i 's|^CPPFLAGS+= -DHOST$|CPPFLAGS+= -DHOST\nCPPFLAGS+= -include sys/sysmacros.h|' makefile
+
+          # 4) 编译 + 链接（补上 PCRE / pthread）
           grep -E '^(TOOLCHAIN|CC|LD)=' makefile
-          make CC=gcc LD=gcc
+          make CC=gcc LD=gcc LIBS="-lpcre -lpthread"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
