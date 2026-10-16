@@ -13,7 +13,10 @@ env:
   AOSP_BASE: https://android.googlesource.com
 
 jobs:
-  build:
+  # =====================================================================
+  # Linux 版（已跑通的保持原样）
+  # =====================================================================
+  build-linux:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,11 +28,9 @@ jobs:
       - name: Setup AOSP layout
         run: |
           set -uo pipefail
-
           mkdir -p aosp/system/core/fastboot
           cp -r _src/. aosp/system/core/fastboot/
           rm -rf aosp/system/core/fastboot/.git
-
           cd aosp
 
           clone_at_tag () {
@@ -38,125 +39,152 @@ jobs:
               "${AOSP_BASE}/$1" "$2"
           }
 
-          echo "===== clone 主依赖 ====="
           clone_at_tag platform/system/core    /tmp/system_core
           clone_at_tag platform/system/extras  /tmp/system_extras
           clone_at_tag platform/external/zlib       external/zlib
           clone_at_tag platform/external/openssl    external/openssl
           clone_at_tag platform/external/libselinux external/libselinux
 
-          echo "===== 拷贝 system/core 子目录 ====="
           mkdir -p system/core
           for dir in include libcutils libsparse libzipfile mkbootimg; do
-            if [ -d "/tmp/system_core/$dir" ]; then
-              cp -r "/tmp/system_core/$dir" system/core/
-              echo "OK   : system/core/$dir"
-            else
-              echo "MISS : system/core/$dir"
-            fi
+            [ -d "/tmp/system_core/$dir" ] && cp -r "/tmp/system_core/$dir" system/core/
           done
 
-          # ---------- 从 4.4.4_r2 补 5.1.1 里被移除的老文件 ----------
-          echo "===== 拉取 4.4.4_r2 作为补丁源 ====="
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/core" /tmp/sc_old
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/extras" /tmp/system_extras_old
 
-          # libcutils 里被移除的老文件
           mkdir -p system/core/libcutils system/core/libzipfile
-          for f in socket_inaddr_any_server.c \
-                   socket_local_client.c \
-                   socket_local_server.c \
-                   socket_loopback_client.c \
-                   socket_loopback_server.c \
-                   socket_network_client.c \
+          for f in socket_inaddr_any_server.c socket_local_client.c \
+                   socket_local_server.c socket_loopback_client.c \
+                   socket_loopback_server.c socket_network_client.c \
                    load_file.c ; do
-            if [ ! -f "system/core/libcutils/$f" ] && [ -f "/tmp/sc_old/libcutils/$f" ]; then
-              cp "/tmp/sc_old/libcutils/$f" system/core/libcutils/
-              echo "补 : libcutils/$f"
-            elif [ -f "system/core/libcutils/$f" ]; then
-              echo "有 : libcutils/$f"
-            else
-              echo "缺 : libcutils/$f  (4.4.4_r2 里也没有)"
-            fi
+            [ ! -f "system/core/libcutils/$f" ] && \
+              cp "/tmp/sc_old/libcutils/$f" system/core/libcutils/ || true
           done
-
-          # libzipfile 里被移除的老文件
           for f in centraldir.c zipfile.c ; do
-            if [ ! -f "system/core/libzipfile/$f" ] && [ -f "/tmp/sc_old/libzipfile/$f" ]; then
-              cp "/tmp/sc_old/libzipfile/$f" system/core/libzipfile/
-              echo "补 : libzipfile/$f"
-            elif [ -f "system/core/libzipfile/$f" ]; then
-              echo "有 : libzipfile/$f"
-            else
-              echo "缺 : libzipfile/$f"
-            fi
+            [ ! -f "system/core/libzipfile/$f" ] && \
+              cp "/tmp/sc_old/libzipfile/$f" system/core/libzipfile/ || true
           done
 
-          # ---------- 关键修复：整个 ext4_utils 目录用 4.4.4_r2 的 ----------
-          # 项目 2016 年的 makefile 配套的是 4.4.4_r2 时代的 ext4_utils，
-          # 5.1.1 的 ext4_utils 改了 API/结构体，链接会炸。
-          echo "===== 替换 system/extras/ext4_utils 为 4.4.4_r2 版本 ====="
           rm -rf system/extras/ext4_utils
           mkdir -p system/extras
           cp -r /tmp/system_extras_old/ext4_utils system/extras/ext4_utils
-
-          echo "----- 4.4.4_r2 ext4_utils 目录内容 -----"
-          ls system/extras/ext4_utils/
-
-          echo "----- 校验关键文件是否齐全 -----"
-          for f in make_ext4fs.c ext4fixup.c ext4_utils.c allocate.c \
-                   contents.c extent.c indirect.c uuid.c sha1.c \
-                   wipe.c crc16.c ; do
-            if [ -f "system/extras/ext4_utils/$f" ]; then
-              echo "OK  : $f"
-            else
-              echo "MISS: $f"
-            fi
-          done
-
-          echo "===== 最终 libcutils ====="
-          ls system/core/libcutils/
-          echo "===== 最终 libzipfile ====="
-          ls system/core/libzipfile/
 
       - name: Install build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libpcre3-dev
 
-      - name: Build
+      - name: Build Linux fastboot
         working-directory: aosp/system/core/fastboot
         run: |
-          # 1) 清空硬编码 poky 工具链，改用系统 gcc
           sed -i 's|^TOOLCHAIN=.*|TOOLCHAIN=|' makefile
-
-          # 2) 规避 glibc>=2.30 引入的 gettid 符号冲突
-          sed -i 's/\bgettid\b/gettid_selinux/g' \
-            ../../../external/libselinux/src/procattr.c
-
-          # 3) 规避 glibc 把 major/minor 从 sys/types.h 拆出的问题
+          sed -i 's/\bgettid\b/gettid_selinux/g' ../../../external/libselinux/src/procattr.c
           sed -i 's|^CPPFLAGS+= -DHOST$|CPPFLAGS+= -DHOST\nCPPFLAGS+= -include sys/sysmacros.h|' makefile
-
-          # 4) 5.1.1 已把 list 相关函数 inline 到头文件，不再编译 list.c
           sed -i '/^SRCS+= list\.c[[:space:]]*$/d' makefile
-
-          # 5) 定义 _FILE_OFFSET_BITS=64，绕开 Compat.h 的 #error
           sed -i 's|^CPPFLAGS+= -D_XOPEN_SOURCE$|CPPFLAGS+= -D_XOPEN_SOURCE\nCPPFLAGS+= -D_FILE_OFFSET_BITS=64|' makefile
-
-          # 6) 规避 Compat.h 里的 static lseek64 与 glibc 冲突
           sed -i 's/static inline off64_t lseek64(/static inline off64_t aosp_compat_unused_lseek64(/' \
             ../include/utils/Compat.h
-
-          echo "===== CPPFLAGS 关键行 ====="
-          grep -E '^CPPFLAGS\+=' makefile
-
           make CC=gcc LD=gcc LIBS="-lpcre -lpthread"
 
-      - name: Upload artifact
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fastboot-binary
+          name: fastboot-linux
           path: aosp/system/core/fastboot/fastboot
+          if-no-files-found: error
+
+  # =====================================================================
+  # Windows 版（新增）
+  # =====================================================================
+  build-windows:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source to temp
+        uses: actions/checkout@v4
+        with:
+          path: _src
+
+      - name: Setup AOSP layout (只拉 Windows 需要的头文件)
+        run: |
+          set -uo pipefail
+          mkdir -p aosp/system/core/fastboot
+          cp -r _src/. aosp/system/core/fastboot/
+          rm -rf aosp/system/core/fastboot/.git
+          cd aosp
+
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/system/core" /tmp/system_core
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/external/zlib" external/zlib
+
+          mkdir -p system/core
+          for dir in include libsparse mkbootimg ; do
+            [ -d "/tmp/system_core/$dir" ] && cp -r "/tmp/system_core/$dir" system/core/
+          done
+
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+
+      - name: Write Windows makefile
+        working-directory: aosp/system/core/fastboot
+        run: |
+          cat > makefile.win <<'EOF'
+          # Windows 版 makefile（独立于 makefile）
+          SRCS  = protocol.c
+          SRCS += engine.c
+          SRCS += bootimg.c
+          SRCS += fastboot.c
+          SRCS += usb_windows.c
+          SRCS += util_windows.c
+
+          VPATH += ../../../external/zlib/src
+          SRCS  += adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c \
+                   gzread.c gzwrite.c infback.c inflate.c inftrees.c \
+                   inffast.c trees.c uncompr.c zutil.c
+
+          VPATH += ../libsparse
+          SRCS  += backed_block.c output_file.c sparse.c sparse_crc32.c \
+                   sparse_err.c sparse_read.c
+
+          CPPFLAGS  = -DHOST -DADB_HOST=1 -DHAVE_FORKEXEC=1 -DHAVE_SYMLINKS
+          CPPFLAGS += -DHAVE_TERMIO_H -DHAVE_SYS_SOCKET_H -D_GNU_SOURCE -D_XOPEN_SOURCE
+          CPPFLAGS += -I. -I../include -I../mkbootimg -I../libsparse/include
+          CPPFLAGS += -I../../../external/zlib
+
+          CFLAGS = -O2 -g -Wall -Wno-unused-parameter -Wno-int-to-pointer-cast
+          CFLAGS += -Wno-pointer-to-int-cast -Wno-format
+
+          CC = x86_64-w64-mingw32-gcc
+          LD = x86_64-w64-mingw32-gcc
+          LDFLAGS = -lws2_32 -lsetupapi -luser32 -lkernel32 -ladvapi32
+
+          OBJS = $(SRCS:.c=.o)
+
+          all: fastboot.exe
+
+          fastboot.exe: $(OBJS)
+          	$(LD) -o $@ $(LDFLAGS) $(OBJS)
+
+          clean:
+          	rm -f $(OBJS) fastboot.exe
+          EOF
+          echo "===== makefile.win ====="
+          cat makefile.win
+
+      - name: Build Windows fastboot.exe
+        working-directory: aosp/system/core/fastboot
+        run: |
+          make -f makefile.win
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastboot-windows
+          path: aosp/system/core/fastboot/fastboot.exe
           if-no-files-found: error
