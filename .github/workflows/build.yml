@@ -10,6 +10,7 @@ on:
 env:
   AOSP_TAG: android-5.1.1_r38
   AOSP_TAG_OLD: android-4.4.4_r2
+  AOSP_TAG_DEV: android-2.3.7_r1
   AOSP_BASE: https://android.googlesource.com
 
 jobs:
@@ -145,6 +146,31 @@ jobs:
           rm -rf system/extras/ext4_utils
           mkdir -p system/extras
           cp -r /tmp/system_extras_old/ext4_utils system/extras/ext4_utils
+
+          # ---------- 从 development 仓库获取 adb_api.h ----------
+          echo "===== 克隆 platform/development (老 tag) 获取 adb_api.h ====="
+          rm -rf /tmp/development
+          git clone --depth=1 --branch "${AOSP_TAG_DEV}" \
+            "${AOSP_BASE}/platform/development" /tmp/development || \
+            echo "!! 老 tag clone 失败，继续尝试查找"
+
+          echo "===== 查找 adb_api.h ====="
+          find /tmp/development -name 'adb_api.h' 2>/dev/null || true
+
+          SRC_DIR=$(find /tmp/development -name 'adb_api.h' -exec dirname {} \; 2>/dev/null | head -1)
+          echo "adb_api.h 所在目录: $SRC_DIR"
+
+          mkdir -p compat
+          if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR" ]; then
+            cp -v "$SRC_DIR"/*.h compat/
+            # 去掉 __declspec(dllimport) / __declspec(dllexport)，避免 __imp_ 符号
+            sed -i 's/__declspec(dllimport)//g; s/__declspec(dllexport)//g' compat/adb_api.h 2>/dev/null || true
+            echo "----- compat/adb_api.h 头部 20 行 -----"
+            head -20 compat/adb_api.h
+          else
+            echo "错误：未找到 adb_api.h"
+            exit 1
+          fi
 
       - name: Download AdbWinApi.dll from MSYS2
         run: |
@@ -303,10 +329,10 @@ jobs:
                       g_##fn = (type)GetProcAddress(g_adbwinapi, #fn); \
               } while (0)
 
-          typedef ADBAPIHANDLE (__cdecl *AdbCreateInterfaceByName_t)(const wchar_t *);
+          typedef ADBAPIHANDLE (*AdbCreateInterfaceByName_t)(const wchar_t *);
           static AdbCreateInterfaceByName_t g_AdbCreateInterfaceByName = NULL;
 
-          ADBAPIHANDLE __cdecl
+          ADBAPIHANDLE
           AdbCreateInterfaceByName(const wchar_t *interface_name)
           {
               ensure_load();
@@ -316,11 +342,11 @@ jobs:
               return g_AdbCreateInterfaceByName(interface_name);
           }
 
-          typedef ADBAPIHANDLE (__cdecl *AdbOpenDefaultBulkReadEndpoint_t)(
+          typedef ADBAPIHANDLE (*AdbOpenDefaultBulkReadEndpoint_t)(
               ADBAPIHANDLE, int, int, int);
           static AdbOpenDefaultBulkReadEndpoint_t g_AdbOpenDefaultBulkReadEndpoint = NULL;
 
-          ADBAPIHANDLE __cdecl
+          ADBAPIHANDLE
           AdbOpenDefaultBulkReadEndpoint(ADBAPIHANDLE adb_interface,
                                           int endpoint_index,
                                           int endpoint_type,
@@ -335,11 +361,11 @@ jobs:
                   adb_interface, endpoint_index, endpoint_type, async);
           }
 
-          typedef ADBAPIHANDLE (__cdecl *AdbOpenDefaultBulkWriteEndpoint_t)(
+          typedef ADBAPIHANDLE (*AdbOpenDefaultBulkWriteEndpoint_t)(
               ADBAPIHANDLE, int, int, int);
           static AdbOpenDefaultBulkWriteEndpoint_t g_AdbOpenDefaultBulkWriteEndpoint = NULL;
 
-          ADBAPIHANDLE __cdecl
+          ADBAPIHANDLE
           AdbOpenDefaultBulkWriteEndpoint(ADBAPIHANDLE adb_interface,
                                            int endpoint_index,
                                            int endpoint_type,
@@ -354,11 +380,11 @@ jobs:
                   adb_interface, endpoint_index, endpoint_type, async);
           }
 
-          typedef bool (__cdecl *AdbGetInterfaceName_t)(
+          typedef bool (*AdbGetInterfaceName_t)(
               ADBAPIHANDLE, wchar_t *, unsigned long *, int);
           static AdbGetInterfaceName_t g_AdbGetInterfaceName = NULL;
 
-          bool __cdecl
+          bool
           AdbGetInterfaceName(ADBAPIHANDLE adb_interface,
                               wchar_t *name,
                               unsigned long *name_size,
@@ -371,12 +397,12 @@ jobs:
               return g_AdbGetInterfaceName(adb_interface, name, name_size, ansi);
           }
 
-          typedef bool (__cdecl *AdbReadEndpointSync_t)(
+          typedef bool (*AdbReadEndpointSync_t)(
               ADBAPIHANDLE, void *, unsigned long, unsigned long *,
               unsigned long, unsigned long *);
           static AdbReadEndpointSync_t g_AdbReadEndpointSync = NULL;
 
-          bool __cdecl
+          bool
           AdbReadEndpointSync(ADBAPIHANDLE adb_endpoint,
                               void *buffer,
                               unsigned long bytes_to_read,
@@ -392,11 +418,11 @@ jobs:
                                            bytes_read, time_out, time_out_actual);
           }
 
-          typedef bool (__cdecl *AdbWriteEndpointSync_t)(
+          typedef bool (*AdbWriteEndpointSync_t)(
               ADBAPIHANDLE, void *, unsigned long, unsigned long *, unsigned long);
           static AdbWriteEndpointSync_t g_AdbWriteEndpointSync = NULL;
 
-          bool __cdecl
+          bool
           AdbWriteEndpointSync(ADBAPIHANDLE adb_endpoint,
                                void *buffer,
                                unsigned long bytes_to_write,
@@ -411,10 +437,10 @@ jobs:
                                             bytes_written, time_out);
           }
 
-          typedef bool (__cdecl *AdbGetUsbDeviceDescriptor_t)(ADBAPIHANDLE, void *);
+          typedef bool (*AdbGetUsbDeviceDescriptor_t)(ADBAPIHANDLE, void *);
           static AdbGetUsbDeviceDescriptor_t g_AdbGetUsbDeviceDescriptor = NULL;
 
-          bool __cdecl
+          bool
           AdbGetUsbDeviceDescriptor(ADBAPIHANDLE adb_interface, void *desc)
           {
               ensure_load();
@@ -424,10 +450,10 @@ jobs:
               return g_AdbGetUsbDeviceDescriptor(adb_interface, desc);
           }
 
-          typedef bool (__cdecl *AdbGetUsbInterfaceDescriptor_t)(ADBAPIHANDLE, void *);
+          typedef bool (*AdbGetUsbInterfaceDescriptor_t)(ADBAPIHANDLE, void *);
           static AdbGetUsbInterfaceDescriptor_t g_AdbGetUsbInterfaceDescriptor = NULL;
 
-          bool __cdecl
+          bool
           AdbGetUsbInterfaceDescriptor(ADBAPIHANDLE adb_interface, void *desc)
           {
               ensure_load();
@@ -437,11 +463,11 @@ jobs:
               return g_AdbGetUsbInterfaceDescriptor(adb_interface, desc);
           }
 
-          typedef bool (__cdecl *AdbGetSerialNumber_t)(
+          typedef bool (*AdbGetSerialNumber_t)(
               ADBAPIHANDLE, wchar_t *, unsigned long *, int);
           static AdbGetSerialNumber_t g_AdbGetSerialNumber = NULL;
 
-          bool __cdecl
+          bool
           AdbGetSerialNumber(ADBAPIHANDLE adb_interface,
                              wchar_t *serial_number,
                              unsigned long *serial_number_size,
@@ -455,11 +481,11 @@ jobs:
                                           serial_number_size, ansi);
           }
 
-          typedef ADBAPIHANDLE (__cdecl *AdbEnumInterfaces_t)(
+          typedef ADBAPIHANDLE (*AdbEnumInterfaces_t)(
               void *, int, int, int);
           static AdbEnumInterfaces_t g_AdbEnumInterfaces = NULL;
 
-          ADBAPIHANDLE __cdecl
+          ADBAPIHANDLE
           AdbEnumInterfaces(void *class_id,
                             int enum_not_present,
                             int single_interface,
@@ -473,11 +499,11 @@ jobs:
                                          single_interface, close_handle);
           }
 
-          typedef bool (__cdecl *AdbNextInterface_t)(
+          typedef bool (*AdbNextInterface_t)(
               ADBAPIHANDLE, void *, unsigned long *);
           static AdbNextInterface_t g_AdbNextInterface = NULL;
 
-          bool __cdecl
+          bool
           AdbNextInterface(ADBAPIHANDLE adb_handle,
                            void *info,
                            unsigned long *size)
@@ -489,10 +515,10 @@ jobs:
               return g_AdbNextInterface(adb_handle, info, size);
           }
 
-          typedef bool (__cdecl *AdbCloseHandle_t)(ADBAPIHANDLE);
+          typedef bool (*AdbCloseHandle_t)(ADBAPIHANDLE);
           static AdbCloseHandle_t g_AdbCloseHandle = NULL;
 
-          bool __cdecl
+          bool
           AdbCloseHandle(ADBAPIHANDLE adb_handle)
           {
               ensure_load();
@@ -502,6 +528,9 @@ jobs:
               return g_AdbCloseHandle(adb_handle);
           }
           ADB_REAL_EOF
+
+          # 去掉 __cdecl，使用默认调用约定（与 adb_api.h 一致）
+          sed -i 's/__cdecl //g' compat/adb_api_real.c
 
           echo "----- compat 目录内容 -----"
           ls -la compat/
