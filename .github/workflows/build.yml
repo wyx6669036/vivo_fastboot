@@ -8,9 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  # 主 AOSP 版本：路径结构与项目 makefile 匹配，libzipfile 仍在
   AOSP_TAG: android-5.1.1_r38
-  # 补丁版本：用于补 5.1.1 中已被移除的老文件
   AOSP_TAG_OLD: android-4.4.4_r2
   AOSP_BASE: https://android.googlesource.com
 
@@ -19,17 +17,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ================================================================
-      # 1. 把仓库拉到临时目录 _src，不动仓库本身
-      # ================================================================
       - name: Checkout source to temp
         uses: actions/checkout@v4
         with:
           path: _src
 
-      # ================================================================
-      # 2. 构造 AOSP 目录树，把你的源码放到 system/core/fastboot/
-      # ================================================================
       - name: Setup AOSP layout
         run: |
           set -uo pipefail
@@ -84,7 +76,6 @@ jobs:
 
           mkdir -p system/core/libcutils system/core/libzipfile
 
-          # 注意：list.c 不补，5.1.1 已把它 inline 到 cutils/list.h
           for f in socket_inaddr_any_server.c \
                    socket_local_client.c \
                    socket_local_server.c \
@@ -118,17 +109,11 @@ jobs:
           echo "===== 补丁后 libzipfile ====="
           ls system/core/libzipfile/
 
-      # ================================================================
-      # 3. 构建依赖
-      # ================================================================
       - name: Install build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libpcre3-dev
 
-      # ================================================================
-      # 4. 编译
-      # ================================================================
       - name: Build
         working-directory: aosp/system/core/fastboot
         run: |
@@ -145,18 +130,22 @@ jobs:
           # 4) 5.1.1 已把 list 相关函数 inline 到头文件，不再编译 list.c
           sed -i '/^SRCS+= list\.c[[:space:]]*$/d' makefile
 
+          # 5) 定义 _FILE_OFFSET_BITS=64，绕开 Compat.h 的 #error
+          sed -i 's|^CPPFLAGS+= -D_XOPEN_SOURCE$|CPPFLAGS+= -D_XOPEN_SOURCE\nCPPFLAGS+= -D_FILE_OFFSET_BITS=64|' makefile
+
+          # 6) 规避 Compat.h 里的 static lseek64 与 glibc 冲突
+          sed -i 's/static inline off64_t lseek64(/static inline off64_t aosp_compat_unused_lseek64(/' \
+            ../include/utils/Compat.h
+
           echo "===== makefile 中的 list.c 引用 ====="
           grep -n 'list\.c' makefile || echo "(已删除)"
+          echo "===== CPPFLAGS 关键行 ====="
+          grep -E '^CPPFLAGS\+=' makefile
+          echo "===== Compat.h 中 lseek64 ====="
+          grep -n 'lseek64' ../include/utils/Compat.h
 
-          echo "===== TOOLCHAIN / CC / LD ====="
-          grep -E '^(TOOLCHAIN|CC|LD)=' makefile
-
-          # 5) 编译
           make CC=gcc LD=gcc LIBS="-lpcre -lpthread"
 
-      # ================================================================
-      # 5. 上传二进制
-      # ================================================================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
