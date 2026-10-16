@@ -66,16 +66,14 @@ jobs:
           fi
 
           # ---------- 从 4.4.4_r2 补 5.1.1 里被移除的老文件 ----------
-          echo "===== 补丁前 libcutils ====="
-          ls system/core/libcutils/ || true
-          echo "===== 补丁前 libzipfile ====="
-          ls system/core/libzipfile/ || true
-
+          echo "===== 拉取 4.4.4_r2 作为补丁源 ====="
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/core" /tmp/sc_old
+          git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
+            "${AOSP_BASE}/platform/system/extras" /tmp/system_extras_old
 
+          # libcutils 里被移除的老文件
           mkdir -p system/core/libcutils system/core/libzipfile
-
           for f in socket_inaddr_any_server.c \
                    socket_local_client.c \
                    socket_local_server.c \
@@ -93,6 +91,7 @@ jobs:
             fi
           done
 
+          # libzipfile 里被移除的老文件
           for f in centraldir.c zipfile.c ; do
             if [ ! -f "system/core/libzipfile/$f" ] && [ -f "/tmp/sc_old/libzipfile/$f" ]; then
               cp "/tmp/sc_old/libzipfile/$f" system/core/libzipfile/
@@ -104,9 +103,21 @@ jobs:
             fi
           done
 
-          echo "===== 补丁后 libcutils ====="
+          # ---------- 关键修复：ext4_utils.c 用 4.4.4_r2 版本 ----------
+          # 5.1.1 的 ext4_utils.c 里 ext4_parse_sb 没有定义，
+          # 而 4.4.4_r2 的版本（项目原 makefile 就是针对它写的）里有。
+          echo "===== 诊断: 5.1.1 ext4_utils.c 中 ext4_parse_sb ====="
+          grep -n 'ext4_parse_sb' system/extras/ext4_utils/ext4_utils.c || echo "(未找到)"
+          echo "===== 诊断: 4.4.4_r2 ext4_utils.c 中 ext4_parse_sb ====="
+          grep -n 'ext4_parse_sb' /tmp/system_extras_old/ext4_utils/ext4_utils.c || echo "(未找到)"
+
+          echo "===== 用 4.4.4_r2 的 ext4_utils.c 覆盖 5.1.1 的 ====="
+          cp /tmp/system_extras_old/ext4_utils/ext4_utils.c \
+             system/extras/ext4_utils/ext4_utils.c
+
+          echo "===== 最终 libcutils ====="
           ls system/core/libcutils/
-          echo "===== 补丁后 libzipfile ====="
+          echo "===== 最终 libzipfile ====="
           ls system/core/libzipfile/
 
       - name: Install build deps
@@ -137,12 +148,8 @@ jobs:
           sed -i 's/static inline off64_t lseek64(/static inline off64_t aosp_compat_unused_lseek64(/' \
             ../include/utils/Compat.h
 
-          echo "===== makefile 中的 list.c 引用 ====="
-          grep -n 'list\.c' makefile || echo "(已删除)"
           echo "===== CPPFLAGS 关键行 ====="
           grep -E '^CPPFLAGS\+=' makefile
-          echo "===== Compat.h 中 lseek64 ====="
-          grep -n 'lseek64' ../include/utils/Compat.h
 
           make CC=gcc LD=gcc LIBS="-lpcre -lpthread"
 
