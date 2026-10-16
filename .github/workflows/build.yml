@@ -9,6 +9,7 @@ on:
 
 env:
   AOSP_TAG: android-5.1.1_r38
+  AOSP_TAG_OLD: android-4.4.4_r2
   AOSP_BASE: https://android.googlesource.com
 
 jobs:
@@ -61,6 +62,47 @@ jobs:
             echo "MISS : system/extras/ext4_utils"
           fi
 
+          # ---------- 从 4.4.4_r2 补老文件 ----------
+          echo "===== 补丁前 libcutils ====="
+          ls system/core/libcutils/ || true
+          echo "===== 补丁前 libzipfile ====="
+          ls system/core/libzipfile/ || true
+
+          git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
+            "${AOSP_BASE}/platform/system/core" /tmp/sc_old
+
+          mkdir -p system/core/libcutils system/core/libzipfile
+
+          for f in list.c \
+                   socket_inaddr_any_server.c \
+                   socket_local_client.c \
+                   socket_local_server.c \
+                   socket_loopback_client.c \
+                   socket_loopback_server.c \
+                   socket_network_client.c \
+                   load_file.c ; do
+            if [ ! -f "system/core/libcutils/$f" ] && [ -f "/tmp/sc_old/libcutils/$f" ]; then
+              cp "/tmp/sc_old/libcutils/$f" system/core/libcutils/
+              echo "补 : libcutils/$f"
+            else
+              echo "有 : libcutils/$f"
+            fi
+          done
+
+          for f in centraldir.c zipfile.c ; do
+            if [ ! -f "system/core/libzipfile/$f" ] && [ -f "/tmp/sc_old/libzipfile/$f" ]; then
+              cp "/tmp/sc_old/libzipfile/$f" system/core/libzipfile/
+              echo "补 : libzipfile/$f"
+            else
+              echo "有 : libzipfile/$f"
+            fi
+          done
+
+          echo "===== 补丁后 libcutils ====="
+          ls system/core/libcutils/
+          echo "===== 补丁后 libzipfile ====="
+          ls system/core/libzipfile/
+
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -69,17 +111,11 @@ jobs:
       - name: Build
         working-directory: aosp/system/core/fastboot
         run: |
-          # 1) 清空硬编码 poky 工具链
           sed -i 's|^TOOLCHAIN=.*|TOOLCHAIN=|' makefile
-
-          # 2) 规避 glibc>=2.30 的 gettid 符号冲突
           sed -i 's/\bgettid\b/gettid_selinux/g' \
             ../../../external/libselinux/src/procattr.c
-
-          # 3) 规避 glibc 把 major/minor 从 sys/types.h 拆出的问题
           sed -i 's|^CPPFLAGS+= -DHOST$|CPPFLAGS+= -DHOST\nCPPFLAGS+= -include sys/sysmacros.h|' makefile
 
-          # 4) 编译 + 链接（补上 PCRE / pthread）
           grep -E '^(TOOLCHAIN|CC|LD)=' makefile
           make CC=gcc LD=gcc LIBS="-lpcre -lpthread"
 
