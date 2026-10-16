@@ -85,17 +85,10 @@ jobs:
             fi
           done
 
-          echo "===== 补 libzipfile 老文件 ====="
-          for f in centraldir.c zipfile.c ; do
-            if [ ! -f "system/core/libzipfile/$f" ] && [ -f "/tmp/sc_old/libzipfile/$f" ]; then
-              cp "/tmp/sc_old/libzipfile/$f" system/core/libzipfile/
-              echo "补 : libzipfile/$f"
-            elif [ -f "system/core/libzipfile/$f" ]; then
-              echo "有 : libzipfile/$f"
-            else
-              echo "缺 : libzipfile/$f"
-            fi
-          done
+          echo "===== 整个 libzipfile 用 4.4.4_r2 覆盖 ====="
+          rm -rf system/core/libzipfile
+          cp -r /tmp/sc_old/libzipfile system/core/libzipfile
+          ls system/core/libzipfile/
 
           echo "===== 整个 ext4_utils 替换为 4.4.4_r2 版本 ====="
           rm -rf system/extras/ext4_utils
@@ -180,15 +173,14 @@ jobs:
           git clone --depth=1 --branch "${AOSP_TAG_OLD}" \
             "${AOSP_BASE}/platform/system/extras" /tmp/system_extras_old
 
-          # libzipfile（从 4.4.4_r2 补，5.1.1 已删）
-          mkdir -p system/core/libzipfile
-          cp /tmp/sc_old/libzipfile/centraldir.c system/core/libzipfile/
-          cp /tmp/sc_old/libzipfile/zipfile.c    system/core/libzipfile/
-          cp /tmp/sc_old/libzipfile/zipfile.h    system/core/libzipfile/ 2>/dev/null || true
+          # libzipfile：整个目录覆盖（含 private.h 等头文件）
+          rm -rf system/core/libzipfile
+          cp -r /tmp/sc_old/libzipfile system/core/libzipfile
           echo "----- libzipfile -----"
           ls system/core/libzipfile/
 
-          # ext4_utils（只要头文件 + 部分 .c 用于凑 make_ext4fs_sparse_fd）
+          # ext4_utils：整个目录覆盖
+          rm -rf system/extras/ext4_utils
           mkdir -p system/extras
           cp -r /tmp/system_extras_old/ext4_utils system/extras/ext4_utils
 
@@ -248,7 +240,7 @@ jobs:
           #endif
           MMAN_EOF
 
-          # 2) adb_api.h → compat/，去掉 dllimport，避免 __imp_ 符号
+          # 2) adb_api.h → compat/，去掉 dllimport
           rm -rf /tmp/development
           git clone --depth=1 --branch "${AOSP_TAG_DEV}" \
             "${AOSP_BASE}/platform/development" /tmp/development || true
@@ -308,12 +300,6 @@ jobs:
 
           # 4) ext4_utils 里 make_ext4fs_sparse_fd 的 stub
           cat > compat/ext4_stub.c <<'EXT4_EOF'
-          /*
-           * Windows 下 ext4_utils 依赖 selinux，编不动。
-           * 这里只 stub make_ext4fs_sparse_fd，让 fastboot.exe 能链出。
-           * 功能上意味着通过 Windows fastboot 走 sparse 格式化会失败，
-           * 但普通 flash / reboot / oem 等命令不受影响。
-           */
           int make_ext4fs_sparse_fd(int fd, long long len,
                                     const char *mountpoint,
                                     void *seopts, unsigned nseopts)
