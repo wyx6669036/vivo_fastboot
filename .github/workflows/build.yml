@@ -2,35 +2,90 @@ name: Build vivo_fastboot
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, main ]
   workflow_dispatch:
+
+env:
+  # 2016 年前后的 AOSP 版本，可按需修改
+  AOSP_TAG: android-7.1.2_r36
+  AOSP_BASE: https://android.googlesource.com
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      # 1. 先 checkout 你的仓库到临时目录 _src（不直接改仓库结构）
+      - name: Checkout source to temp
+        uses: actions/checkout@v4
+        with:
+          path: _src
 
-    - name: Install build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential gcc g++ make
+      # 2. 构造 AOSP 目录树，把你的源码放到 system/core/fastboot/
+      - name: Setup AOSP layout
+        run: |
+          set -e
 
-    - name: Build fastboot binary
-      run: |
-        # 如果 Makefile 在根目录，直接 make
-        # 如果构建文件在子目录，请修改路径，例如 cd fastboot && make
-        make
+          # 把仓库内容拷到目标位置
+          mkdir -p aosp/system/core/fastboot
+          cp -r _src/. aosp/system/core/fastboot/
+          rm -rf aosp/system/core/fastboot/.git
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: vivo_fastboot-binary
-        path: |
-          fastboot
-          vivo_fastboot
-        if-no-files-found: warn
+          cd aosp
+
+          # --- system/core: include / libcutils / libsparse / libzipfile / mkbootimg ---
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/system/core" /tmp/system_core
+          mkdir -p system/core
+          for dir in include libcutils libsparse libzipfile mkbootimg; do
+            cp -r "/tmp/system_core/${dir}" system/core/
+          done
+
+          # --- system/extras/ext4_utils ---
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/system/extras" /tmp/system_extras
+          mkdir -p system/extras
+          cp -r /tmp/system_extras/ext4_utils system/extras/
+
+          # --- external: zlib / openssl / libselinux ---
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/external/zlib" external/zlib
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/external/openssl" external/openssl
+          git clone --depth=1 --branch "$AOSP_TAG" \
+            "${AOSP_BASE}/platform/external/libselinux" external/libselinux
+
+          echo "===== 目录检查 ====="
+          ls system/core/
+          ls system/extras/
+          ls external/
+          echo "===== zlib src 检查 ====="
+          ls external/zlib/ | head
+          echo "===== libselinux src 检查 ====="
+          ls external/libselinux/ | head
+
+      # 3. 安装构建工具
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      # 4. 编译（只覆盖 TOOLCHAIN，不改仓库文件）
+      - name: Build
+        working-directory: aosp/system/core/fastboot
+        run: |
+          # 把 poky 硬编码路径清空，让 CC/LD 变成系统 gcc/gcc
+          sed -i 's|^TOOLCHAIN=.*|TOOLCHAIN=|' makefile
+          echo "===== TOOLCHAIN / CC / LD ====="
+          grep -E '^(TOOLCHAIN|CC|LD)=' makefile
+          make CC=gcc LD=gcc
+
+      # 5. 上传产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastboot-binary
+          path: aosp/system/core/fastboot/fastboot
+          if-no-files-found: error
