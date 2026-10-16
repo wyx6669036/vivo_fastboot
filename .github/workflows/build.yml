@@ -43,11 +43,6 @@ jobs:
           clone_at_tag platform/external/openssl    external/openssl
           clone_at_tag platform/external/libselinux external/libselinux
 
-          echo "---- /tmp/system_core 顶层 ----";     ls /tmp/system_core
-          echo "---- /tmp/system_extras 顶层 ----";   ls /tmp/system_extras
-          echo "---- external/zlib 顶层 ----";        ls external/zlib
-          echo "---- external/libselinux 顶层 ----";  ls external/libselinux
-
           mkdir -p system/core
           for dir in include libcutils libsparse libzipfile mkbootimg; do
             if [ -d "/tmp/system_core/$dir" ]; then
@@ -66,11 +61,6 @@ jobs:
             echo "MISS : system/extras/ext4_utils"
           fi
 
-          echo "---- 关键路径检查 ----"
-          for p in external/zlib/src external/libselinux/src external/openssl/include; do
-            [ -d "$p" ] && echo "OK   : $p" || echo "MISS : $p"
-          done
-
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -79,7 +69,16 @@ jobs:
       - name: Build
         working-directory: aosp/system/core/fastboot
         run: |
+          # 1) 把 poky 硬编码工具链路径清空
           sed -i 's|^TOOLCHAIN=.*|TOOLCHAIN=|' makefile
+
+          # 2) 规避 glibc>=2.30 的 gettid 符号冲突
+          sed -i 's/\bgettid\b/gettid_selinux/g' \
+            ../../../external/libselinux/src/procattr.c
+          echo "---- procattr.c gettid 相关行 ----"
+          grep -n 'gettid' ../../../external/libselinux/src/procattr.c || true
+
+          # 3) 编译
           echo "===== TOOLCHAIN / CC / LD ====="
           grep -E '^(TOOLCHAIN|CC|LD)=' makefile
           make CC=gcc LD=gcc
