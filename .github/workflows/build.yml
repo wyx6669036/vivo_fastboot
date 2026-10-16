@@ -14,7 +14,7 @@ env:
 
 jobs:
   # =====================================================================
-  # Linux 版（保持不变，已跑通）
+  # Linux 版（已跑通）
   # =====================================================================
   build-linux:
     runs-on: ubuntu-latest
@@ -103,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   # =====================================================================
-  # Windows 版（真实现，不再空壳）
+  # Windows 版（真实现）
   # =====================================================================
   build-windows:
     runs-on: ubuntu-latest
@@ -157,32 +157,61 @@ jobs:
           mkdir -p /tmp/msys2_dll
           cd /tmp/msys2_dll
 
-          # 安装 zstd 用于解压 .pkg.tar.zst
+          # 安装必要的工具
           sudo apt-get update
           sudo apt-get install -y zstd curl
 
-          # 下载 MSYS2 的 android-tools 包
-          # 该包包含预编译的 AdbWinApi.dll 和 AdbWinUsbApi.dll
-          curl -L -o android-tools.pkg.tar.zst \
-            "https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-android-tools-34.0.5-1-any.pkg.tar.zst"
+          # 定义候选下载链接（优先官方源，失败则回退到清华镜像）
+          URLS=(
+            "https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-android-tools-37.0.0-2-any.pkg.tar.zst"
+            "https://mirrors.tuna.tsinghua.edu.cn/msys2/mingw/ucrt64/mingw-w64-ucrt-x86_64-android-tools-37.0.0-2-any.pkg.tar.zst"
+            "https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-android-tools-37.0.0-2-any.pkg.tar.zst"
+          )
+
+          DOWNLOADED=false
+          for URL in "${URLS[@]}"; do
+            echo "尝试下载: $URL"
+            # -f 让 curl 在 HTTP 错误时返回非零退出码
+            if curl -fL --retry 3 --retry-delay 5 -o android-tools.pkg.tar.zst "$URL"; then
+              FILE_SIZE=$(stat -c%s "android-tools.pkg.tar.zst")
+              if [ "$FILE_SIZE" -gt 1048576 ]; then
+                echo "下载成功，文件大小: $FILE_SIZE bytes"
+                DOWNLOADED=true
+                break
+              else
+                echo "文件大小异常 ($FILE_SIZE bytes)，可能下载失败"
+              fi
+            fi
+          done
+
+          if [ "$DOWNLOADED" = false ]; then
+            echo "所有下载源均失败，请检查网络"
+            exit 1
+          fi
+
+          # 验证 zstd 文件格式
+          if ! zstd -l android-tools.pkg.tar.zst > /dev/null 2>&1; then
+            echo "错误：下载的文件不是有效的 zstd 格式"
+            exit 1
+          fi
 
           # 解压
-          tar --use-compress-program=unzstd -xf android-tools.pkg.tar.zst
+          zstd -d android-tools.pkg.tar.zst -o android-tools.pkg.tar
+          tar -xf android-tools.pkg.tar
 
-          # 找到 DLL
+          # 查找并拷贝 DLL
           echo "===== 查找 DLL ====="
           find . -name 'AdbWinApi.dll' -o -name 'AdbWinUsbApi.dll'
 
-          # 拷贝到 compat/dll 目录
           mkdir -p ../../../compat/dll
-          find . -name 'AdbWinApi.dll' -exec cp {} ../../../compat/dll/ \;
-          find . -name 'AdbWinUsbApi.dll' -exec cp {} ../../../compat/dll/ \;
+          find . -name 'AdbWinApi.dll' -exec cp -v {} ../../../compat/dll/ \;
+          find . -name 'AdbWinUsbApi.dll' -exec cp -v {} ../../../compat/dll/ \;
 
           echo "===== compat/dll 内容 ====="
           ls -la ../../../compat/dll/
 
-      # ---------- 创建 compat 目录 ----------
-      - name: Create compat headers and stubs
+      # ---------- 创建 compat 头文件和动态加载实现 ----------
+      - name: Create compat headers and real adb_api
         run: |
           set -uo pipefail
 
@@ -291,7 +320,6 @@ jobs:
               }
           }
 
-          /* ===== 动态加载辅助宏 ===== */
           #define ADB_RESOLVE(fn, type) \
               do { \
                   if (!g_##fn) \
@@ -591,11 +619,8 @@ jobs:
           set -uo pipefail
 
           # 1) ext4_utils.c：添加 USE_MINGW 条件包含
-          #    参考 AOSP 官方补丁 Iba3758a0e13a898920d30d7fa5da696c22daa2b7
           if ! grep -q 'USE_MINGW' ext4_utils.c; then
-            # 在 #include <fcntl.h> 之后添加 winsock2.h
             sed -i 's|#include <fcntl.h>|#include <fcntl.h>\n#ifdef USE_MINGW\n#include <winsock2.h>\n#else\n#include <arpa/inet.h>\n#include <sys/ioctl.h>\n#endif|' ext4_utils.c
-            # 删除原有的 arpa/inet.h 和 sys/ioctl.h 直接包含（已移入条件块）
             sed -i '/^#include <arpa\/inet.h>/d' ext4_utils.c
             sed -i '/^#include <sys\/ioctl.h>/d' ext4_utils.c
             echo "Patched ext4_utils.c"
@@ -613,10 +638,8 @@ jobs:
             echo "Patched contents.c"
           fi
 
-          # 4) sha1.c：添加头文件
+          # 4) sha1.c / crc16.c 补头文件
           sed -i 's|#include <string.h>|#include <string.h>\n#include <stdint.h>|' sha1.c 2>/dev/null || true
-
-          # 5) crc16.c：添加头文件
           sed -i 's|#include <stdint.h>|#include <stdint.h>\n#include <string.h>|' crc16.c 2>/dev/null || true
 
           echo "===== ext4_utils.c 包含部分 ====="
