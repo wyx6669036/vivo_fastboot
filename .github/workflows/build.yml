@@ -225,7 +225,7 @@ jobs:
           echo "===== $DLL_DEST 内容 ====="
           ls -la "$DLL_DEST/"
 
-      - name: Create compat headers and real adb_api
+      - name: Create compat headers and stubs
         run: |
           set -uo pipefail
 
@@ -528,13 +528,29 @@ jobs:
           }
           ADB_REAL_EOF
 
-          # 去掉 __cdecl，使用默认调用约定（与 adb_api.h 一致）
           sed -i 's/__cdecl //g' compat/adb_api_real.c
-
-          # 确保 stdbool.h 存在（bool/true/false）
           if ! grep -q 'stdbool.h' compat/adb_api_real.c; then
             sed -i 's|#include <string.h>|#include <string.h>\n#include <stdbool.h>|' compat/adb_api_real.c
           fi
+
+          # ---------- ext4_stub.c：提供 make_ext4fs_sparse_fd ----------
+          cat > compat/ext4_stub.c <<'EXT4_STUB_EOF'
+          /*
+           * ext4_stub.c
+           *
+           * Windows 下 make_ext4fs.c 依赖 selinux，编不动。
+           * 这里只 stub make_ext4fs_sparse_fd，让 fastboot.exe 能链出。
+           * 普通 flash / reboot / oem 等命令不受影响；
+           * 只有走 sparse 格式化的路径会失败（返回 -1）。
+           */
+          int make_ext4fs_sparse_fd(int fd, long long len,
+                                    const char *mountpoint,
+                                    void *seopts, unsigned nseopts)
+          {
+              (void)fd; (void)len; (void)mountpoint; (void)seopts; (void)nseopts;
+              return -1;
+          }
+          EXT4_STUB_EOF
 
           echo "----- adb_api_real.c 前 8 行 -----"
           head -8 compat/adb_api_real.c
@@ -572,7 +588,7 @@ jobs:
           SRCS  += centraldir.c zipfile.c
 
           VPATH += ../../../compat
-          SRCS  += adb_api_real.c
+          SRCS  += adb_api_real.c ext4_stub.c
 
           VPATH += ../../extras/ext4_utils
           SRCS  += ext4_utils.c allocate.c contents.c extent.c indirect.c \
@@ -593,14 +609,15 @@ jobs:
 
           CC = x86_64-w64-mingw32-gcc
           LD = x86_64-w64-mingw32-gcc
-          LDFLAGS = -lws2_32 -lsetupapi -luser32 -lkernel32 -ladvapi32
+          LIBS = -lws2_32 -lsetupapi -luser32 -lkernel32 -ladvapi32
 
           OBJS = $(SRCS:.c=.o)
 
           all: fastboot.exe
 
+          # 注意：库放在对象文件后面，否则 ld 不会从库里拉符号
           fastboot.exe: $(OBJS)
-          	$(LD) -o $@ $(LDFLAGS) $(OBJS)
+          	$(LD) -o $@ $(OBJS) $(LIBS)
 
           clean:
           	rm -f $(OBJS) fastboot.exe
